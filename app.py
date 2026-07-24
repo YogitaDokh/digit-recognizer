@@ -11,7 +11,7 @@ import keras
 app = Flask(__name__)
 
 # Load model upon startup
-MODEL_PATH = "model.keras" if os.path.exists("digit_recognizer.keras") else "digit_recognizer.h5"
+MODEL_PATH = "digit_recognizer.keras" if os.path.exists("digit_recognizer.keras") else "digit_recognizer.h5"
 
 model = None
 if os.path.exists(MODEL_PATH):
