@@ -2,15 +2,16 @@ import os
 import re
 import base64
 import numpy as np
-from PIL import Image, ImageOps
+from PIL import Image
 import io
+import traceback
 from flask import Flask, render_template_string, request, jsonify
 import keras
 
 app = Flask(__name__)
 
 # Load model upon startup
-MODEL_PATH = "digit_recognizer.keras" if os.path.exists("digit_recognizer.keras") else "digit_recognizer.h5"
+MODEL_PATH = "model.keras" if os.path.exists("digit_recognizer.keras") else "digit_recognizer.h5"
 
 model = None
 if os.path.exists(MODEL_PATH):
@@ -19,10 +20,11 @@ if os.path.exists(MODEL_PATH):
         print(f"Model successfully loaded from {MODEL_PATH}")
     except Exception as e:
         print(f"Error loading model: {e}")
+        traceback.print_exc()
 
 def preprocess_image(image_bytes):
     """
-    Preprocess image to match model input shape: (32, 28, 28, 1) or (1, 28, 28, 1)
+    Preprocess image to match model input shape: (1, 28, 28, 1)
     """
     img = Image.open(io.BytesIO(image_bytes)).convert('L')
     
@@ -321,7 +323,18 @@ HTML_TEMPLATE = """
                     body: JSON.stringify(payload)
                 });
                 
-                const data = await response.json();
+                const responseText = await response.text();
+
+                if (!response.ok) {
+                    throw new Error(`Server returned status ${response.status}: ${responseText}`);
+                }
+
+                if (!responseText) {
+                    throw new Error("Empty response received from server.");
+                }
+
+                const data = JSON.parse(responseText);
+
                 if (data.error) throw new Error(data.error);
 
                 let probListHTML = '';
@@ -344,7 +357,7 @@ HTML_TEMPLATE = """
                     <div class="prob-list">${probListHTML}</div>
                 `;
             } catch (err) {
-                resultBox.innerHTML = `<p style="color: #ef4444;">Error: ${err.message}</p>`;
+                resultBox.innerHTML = `<p style="color: #ef4444; word-break: break-all;">Error: ${err.message}</p>`;
             }
         }
     </script>
@@ -359,15 +372,20 @@ def home():
 @app.route('/predict', methods=['POST'])
 def predict():
     if model is None:
-        return jsonify({'error': 'Model weights or file not loaded properly.'}), 500
+        return jsonify({'error': 'Model file (model.keras or model.h5) not found or failed to load on backend.'}), 500
 
     try:
-        data = request.get_json()
-        image_data = data.get('image')
+        data = request.get_json(silent=True)
+        if not data or 'image' not in data:
+            return jsonify({'error': 'No image data payload received.'}), 400
+
+        image_data = data['image']
         
-        # Remove base64 header
-        image_bytes = base64.b64decode(re.sub('^data:image/.+;base64,', '', image_data))
-        
+        # Clean up Base64 string prefix if present
+        if ',' in image_data:
+            image_data = image_data.split(',')[1]
+
+        image_bytes = base64.b64decode(image_data)
         processed_input = preprocess_image(image_bytes)
         
         preds = model.predict(processed_input, verbose=0)[0]
@@ -378,9 +396,11 @@ def predict():
             'prediction': pred_class,
             'confidence': confidence,
             'probabilities': preds.tolist()
-        })
+        }), 200
+
     except Exception as e:
-        return jsonify({'error': str(e)}), 400
+        print("Backend prediction error:\n", traceback.format_exc())
+        return jsonify({'error': f'Prediction processing error: {str(e)}'}), 500
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
