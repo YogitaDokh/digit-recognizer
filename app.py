@@ -1,4 +1,9 @@
 import os
+# Force CPU execution & lower TF memory footprint before importing TensorFlow/Keras
+os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
+
+import gc
 import re
 import base64
 import numpy as np
@@ -10,17 +15,28 @@ import keras
 
 app = Flask(__name__)
 
-# Load model upon startup
-MODEL_PATH = "digit_recognizer.keras" if os.path.exists("digit_recognizer.keras") else "digit_recognizer.h5"
+# Search and assign the correct available model file
+MODEL_PATH = None
+for candidate in ["digit_recognizer.keras", "digit_recognizer.h5", "model.keras", "model.h5"]:
+    if os.path.exists(candidate):
+        MODEL_PATH = candidate
+        break
 
 model = None
-if os.path.exists(MODEL_PATH):
+if MODEL_PATH:
     try:
         model = keras.models.load_model(MODEL_PATH)
         print(f"Model successfully loaded from {MODEL_PATH}")
+        
+        # Warm-up pass to pre-allocate TensorFlow internal graph in RAM
+        dummy_input = np.zeros((1, 28, 28, 1), dtype=np.float32)
+        _ = model.predict(dummy_input, verbose=0)
+        print("Model warm-up complete.")
     except Exception as e:
         print(f"Error loading model: {e}")
         traceback.print_exc()
+else:
+    print("Warning: No valid .keras or .h5 model file found in project root.")
 
 def preprocess_image(image_bytes):
     """
@@ -372,7 +388,7 @@ def home():
 @app.route('/predict', methods=['POST'])
 def predict():
     if model is None:
-        return jsonify({'error': 'Model file (model.keras or model.h5) not found or failed to load on backend.'}), 500
+        return jsonify({'error': 'Model file not found or failed to load on backend.'}), 500
 
     try:
         data = request.get_json(silent=True)
@@ -392,6 +408,9 @@ def predict():
         pred_class = int(np.argmax(preds))
         confidence = float(np.max(preds))
         
+        # Free memory immediately
+        gc.collect()
+
         return jsonify({
             'prediction': pred_class,
             'confidence': confidence,
